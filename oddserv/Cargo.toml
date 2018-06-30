@@ -1,0 +1,6 @@
+[package]
+name = "oddserv"
+version = "0.1.0"
+authors = ["Nemin32 <pergerlori@gmail.com>"]
+
+[dependencies]

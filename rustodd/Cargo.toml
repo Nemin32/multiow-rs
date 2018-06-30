@@ -1,0 +1,7 @@
+[package]
+name = "rustodd"
+version = "0.1.0"
+authors = ["Nemin32 <pergerlori@gmail.com>"]
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser", "processthreadsapi", "memoryapi"] }
