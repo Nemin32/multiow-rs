@@ -25,17 +25,19 @@ fn main() {
     use std::io::Write;
     use std::io::Read;
     
-    print!("Enter your name: ");
     let mut name: String = String::new();
+    println!("Enter your name: ");
     std::io::stdin().read_line(&mut name).unwrap();
     name.pop();
     name.pop();
     
-    print!("\nEnter the server's IP:");
     let mut IP: String = String::new();
+    println!("\nEnter the server's IP:");
     std::io::stdin().read_line(&mut IP).unwrap();
-    name.pop();
-    name.pop();
+    IP.pop();
+    IP.pop();
+    
+    println!("{}:2536", IP);
     
     let mut connection = TcpStream::connect(format!("{}:2536", IP)).unwrap();
     connection.set_read_timeout(Some(time::Duration::from_millis(100))).unwrap();
