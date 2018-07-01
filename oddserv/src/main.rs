@@ -60,22 +60,24 @@ fn announcer(streams: Arc<Mutex<Vec<TcpStream>>>, have_to: Arc<Mutex<bool>>, mud
             let mut counter = 0;
             
             while counter < streams_unlocked.len() {
+                let mut payload = String::new();
                 for (key, val) in &*muds.lock().unwrap() {
-                    let payload = format!("{}: [{}/{}] ({}),", key, val.location[0], val.location[1], val.savedMuds);
+                    payload += &format!("{}: [{}/{}] ({}), ", key, val.location[0], val.location[1], val.savedMuds);
+                }
                     
-                    match streams_unlocked[counter].write(payload.as_bytes()) {
-                        Ok(_) => {
-                            println!("Msg sent to: {}", streams_unlocked[counter].local_addr().unwrap());
-                        },
-                        Err(e) => {
-                            if e.kind() == ErrorKind::ConnectionReset {
-                                println!("Dropping host: {}", streams_unlocked[counter].local_addr().unwrap());
-                                streams_unlocked.remove(counter);
-                                continue;
-                            }
+                match streams_unlocked[counter].write(payload.as_bytes()) {
+                    Ok(_) => {
+                        println!("Msg sent to: {}", streams_unlocked[counter].local_addr().unwrap());
+                    },
+                    Err(e) => {
+                        if e.kind() == ErrorKind::ConnectionReset {
+                            println!("Dropping host: {}", streams_unlocked[counter].local_addr().unwrap());
+                            streams_unlocked.remove(counter);
+                            continue;
                         }
                     }
                 }
+                
             
                 counter = counter + 1;
             }
