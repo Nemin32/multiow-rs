@@ -39,6 +39,7 @@ int main() {
         uint16_t old = 1;
         SIZE_T bytes = 0;
         
+        /*
         std::thread t1(drawOnScreen, oddapp);
         
         while (ReadProcessMemory(proc, (void*)0x5C1BC2, &read, sizeof(uint16_t), &bytes)) {
@@ -52,7 +53,17 @@ int main() {
             Sleep(1000);
         }
         
+
+        
         t1.join();
+        */
+        
+        BYTE* base = (BYTE*)0x5C1B68;
+        WORD xpos = 0;
+        
+        ReadProcessMemory(proc, (void*)(base + 0xBC), &xpos, sizeof(WORD), NULL);
+        std::cout << xpos << "\n";
+        
         CloseHandle(proc);
     }
     
