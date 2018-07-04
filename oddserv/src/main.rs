@@ -5,55 +5,41 @@ use std::sync::{Arc, Mutex};
 use std::time;
 use std::io::ErrorKind;
 
+#[macro_use]
+extern crate serde_derive;
+extern crate bincode;
+use bincode::{serialize, deserialize};
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 struct PlayerInfo {
-    savedMuds: usize,
+    name: String,
+    saved_muds: u16,
     location: [u16; 3],
     position: [u16; 2]
 }
 
 fn handle_client(mut stream: TcpStream, player_list: Arc<Mutex<HashMap<String, PlayerInfo>>>, have_to: Arc<Mutex<bool>>) {
     use std::io::Read;
-    use std::str;
+    //use std::str;
     
     let mut buf = vec![0; 256];
 
     //stream.set_read_timeout(Some(time::Duration::from_millis(100))).unwrap();
     
     loop {
-        //buf.clear();
         match stream.read(&mut buf) {
-            Ok(_) => {
-                let msg = String::from_utf8(buf.clone()).unwrap();
-                let split: Vec<&str> = msg.split("|").collect();
-
-                let name = split[0];
-                let muds = split[1].trim_matches(char::from(0)).parse::<usize>().unwrap();
-                let loc = [
-                    split[2].trim_matches(char::from(0)).parse::<u16>().unwrap(),
-                    split[3].trim_matches(char::from(0)).parse::<u16>().unwrap(),
-                    split[4].trim_matches(char::from(0)).parse::<u16>().unwrap()
-                ];
-                
-                let pos = [
-                    split[5].trim_matches(char::from(0)).parse::<u16>().unwrap(),
-                    split[6].trim_matches(char::from(0)).parse::<u16>().unwrap()
-                ];
-                
+            Ok(_) => {               
+                let plinfo: PlayerInfo = deserialize(&buf[..]).unwrap();
                 let mut plist = player_list.lock().unwrap();
-                
-                
-                let (prevMuds, prevLoc, prevPos) = match plist.get(name) {
-                    Some(info) => (info.savedMuds, info.location, info.position),
+                let (prev_muds, prev_loc, prev_pos) = match plist.get(&plinfo.name) {
+                    Some(info) => (info.saved_muds, info.location, info.position),
                     None => (0, [0,0,0], [0,0])
                 };
                 
-                if muds != prevMuds || loc != prevLoc || pos != prevPos {
-                    plist.insert(split[0].to_string(), PlayerInfo {savedMuds: muds, location: loc, position: pos});                        
+                if plinfo.position != prev_pos || plinfo.location != prev_loc || plinfo.saved_muds != prev_muds {
+                    plist.insert(plinfo.name.clone(), plinfo);
                     *have_to.lock().unwrap() = true;
-                    
-                    println!("[{}]: {}", split[0], muds);
                 }
-                
             },
             
             Err(e) => {
@@ -75,25 +61,30 @@ fn announcer(streams: Arc<Mutex<Vec<TcpStream>>>, have_to: Arc<Mutex<bool>>, mud
             println!("Writing to {} hosts.", streams_unlocked.len());
             let mut counter = 0;
             
+            let mut payload = Vec::new();
+            
+            for (_, vals) in &*muds.lock().unwrap() {
+                payload.push(vals.clone());
+            }
+            
+            println!("{:?}", payload);
+            
+            let bytes: Vec<u8> = serialize(&payload).unwrap();
+            
             while counter < streams_unlocked.len() {
-                let mut payload = String::new();
-                for (key, val) in &*muds.lock().unwrap() {
-                    payload += &format!("{}|{}|{}|{}|{}|{}|{}, ", key, val.savedMuds, val.location[0], val.location[1], val.location[2], val.position[0], val.position[1]);
-                }
-                    
-                match streams_unlocked[counter].write(payload.as_bytes()) {
+                match streams_unlocked[counter].write_all(bytes.as_slice()) {
                     Ok(_) => {
-                        println!("Msg sent to: {}", streams_unlocked[counter].local_addr().unwrap());
+                        println!("Msg sent to: {}", streams_unlocked[counter].peer_addr().unwrap());
                     },
+                    
                     Err(e) => {
-                        if e.kind() == ErrorKind::ConnectionReset {
+                        if e.kind() != ErrorKind::TimedOut {
                             println!("Dropping host: {}", streams_unlocked[counter].local_addr().unwrap());
                             streams_unlocked.remove(counter);
                             continue;
                         }
                     }
                 }
-                
             
                 counter = counter + 1;
             }
@@ -102,7 +93,7 @@ fn announcer(streams: Arc<Mutex<Vec<TcpStream>>>, have_to: Arc<Mutex<bool>>, mud
             *have_to.lock().unwrap() = false;
         }
     
-        thread::sleep(time::Duration::from_millis(500));
+        thread::sleep(time::Duration::from_millis(200));
     }
 }
 
