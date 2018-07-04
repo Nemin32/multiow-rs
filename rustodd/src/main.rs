@@ -16,6 +16,7 @@ use winapi::um::memoryapi::ReadProcessMemory;
 
 use std::mem::size_of;
 use std::ptr::null_mut;
+use std::collections::HashMap;
 
 #[macro_use]
 extern crate serde_derive;
@@ -27,10 +28,10 @@ const ROOM_WIDTH: u16 = 375;
 const ROOM_HEIGHT: u16 = 260;
 
 //640 x 480
-const PROPORTION_W: f64 = 800.0 / ROOM_WIDTH as f64;
-const PROPORTION_H: f64 = 640.0 / ROOM_HEIGHT as f64;
+//const PROPORTION_W: f64 = 800.0 / ROOM_WIDTH as f64;
+//const PROPORTION_H: f64 = 640.0 / ROOM_HEIGHT as f64;
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 struct PlayerInfo {
     name: String,
     saved_muds: u16,
@@ -71,30 +72,35 @@ fn make_connection() -> TcpStream {
 }
 
 fn render_players(relativexy: Receiver<[u16; 2]>) {
+    use winapi::shared::windef::RECT;
+    use winapi::um::winuser::GetWindowRect;
+
     unsafe {
     let oddapp = FindWindowW(null_mut(), into_os("Oddworld Abe's Exoddus").as_ptr());
     let hdc = winapi::um::winuser::GetDC(oddapp);
+    
+    let mut winrect = RECT {left: 0, top: 0, right: 0, bottom: 0};
+    GetWindowRect(oddapp, &mut winrect);
+    
+    let PROPORTION_W: f64 = (winrect.right - winrect.left) as f64 / ROOM_WIDTH as f64;
+    let PROPORTION_H: f64 = (winrect.bottom - winrect.top) as f64 / ROOM_HEIGHT as f64;
     
     let brush = winapi::um::wingdi::CreateSolidBrush(winapi::um::wingdi::RGB(255, 0, 0));
     winapi::um::wingdi::SelectObject(hdc, brush as LPVOID);
     
     loop {
-        //for relativexy in poslist.recv().unwrap() {
-            let relativexy = relativexy.recv().unwrap();
-            winapi::um::wingdi::Rectangle(
-                hdc,
-                ((relativexy[0] as i16 - 4) as f64 * PROPORTION_W) as i32,
-                ((relativexy[1] as i16 - 32) as f64 * PROPORTION_H) as i32,
-                ((relativexy[0] + 14) as f64 * PROPORTION_W) as i32,
-                ((relativexy[1] - 16) as f64 * PROPORTION_H) as i32);
-            };
-        //}
+        let relativexy = relativexy.recv().unwrap();
+        winapi::um::wingdi::Rectangle(
+            hdc,
+            ((relativexy[0] as i16 - 4) as f64 * PROPORTION_W) as i32,
+            ((relativexy[1] as i16 - 32) as f64 * PROPORTION_H) as i32,
+            ((relativexy[0] + 14) as f64 * PROPORTION_W) as i32,
+            ((relativexy[1] - 16) as f64 * PROPORTION_H) as i32);
+        };
     }
 }
 
 fn main() {
-
-    
     unsafe {
         let oddapp = FindWindowW(null_mut(), into_os("Oddworld Abe's Exoddus").as_ptr());
         let mut proc: DWORD = 0;
@@ -146,14 +152,13 @@ fn main() {
         let xp: *const u16 = &xpos;
         ReadProcessMemory(handle, pos_base as LPCVOID, pp as LPVOID, size_of::<u32>(), null_mut());
         ReadProcessMemory(handle, (pointer + 0xBA) as LPCVOID, xp as LPVOID, size_of::<u16>(), null_mut());
-        println!("{:?}", xpos);
         
         let ypos: u16 = 0;
         let yp: *const u16 = &ypos;
         ReadProcessMemory(handle, pos_base as LPCVOID, pp as LPVOID, size_of::<u32>(), null_mut());
         ReadProcessMemory(handle, (pointer + 0xBE) as LPCVOID, yp as LPVOID, size_of::<u16>(), null_mut());
-        println!("{:?}", ypos);
         
+        let mut players = HashMap::new();
         
         loop {
             //0x5C1BC2 DWORD number of rescued Mudokons
@@ -188,19 +193,18 @@ fn main() {
             let mut buffer = vec![0;512];
             match connection.read(&mut buffer) {
                 Ok(_) => {
-                    let msg: Vec<PlayerInfo> = deserialize(&buffer[..]).unwrap();
+                    let msg: HashMap<String, PlayerInfo> = deserialize(&buffer[..]).unwrap();
                     
-                    for player in msg {
-                        //println!("{:?}", player);
-                        sender.send(player.position);
+                    for (name, plinfo) in msg {
+                        players.insert(name.clone(), plinfo.clone());
                     }
-                    
-                    println!("");
                 },
                 _ => {}
             };
             
-            //thread::sleep(time::Duration::from_millis(500));
+            for (_, vals) in &players {sender.send(vals.position).unwrap();}
+            
+            thread::sleep(time::Duration::from_millis(500));
         }
         
     }
