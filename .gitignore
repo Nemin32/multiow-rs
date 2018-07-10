@@ -1,2 +1,4 @@
 tools/
 a.exe
+ddraw.dll
+dllmain.cpp
