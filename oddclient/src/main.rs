@@ -35,6 +35,12 @@ struct PlayerInfo {
     position: [u16; 2] // X, Y
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+enum MessageType {
+    PLAYERSTATES,
+    ANNOUNCEMENT(String)
+}
+
 // I don't really know how this works. I copied this from here: https://github.com/retep998/winapi-rs
 fn into_os(msg: &str) -> Vec<u16> {
     use std::ffi::OsStr;
@@ -216,7 +222,9 @@ fn main() {
         ////// Confusing mess ends here. //////
         
         // This HashMap contains the players' data. See PlayerInfo struct.
-        let mut players = HashMap::new();
+        let mut players: HashMap<String, PlayerInfo> = HashMap::new();
+        let mut announcement: String = String::new();
+        let mut announcer_counter = 0;
         
         loop {
             // 0x5C1BC2 DWORD number of rescued Mudokons
@@ -254,32 +262,51 @@ fn main() {
                 connection.write_all(bytes.as_slice()).unwrap();
             }
 
+            
             // This buffer contains the raw data the server sends us.
+            // TODO: Turn this into a series of "if let"-s.
             let mut buffer = vec![0;512];
             match connection.read(&mut buffer) {
                 Ok(_) => {
-                    // We receive all the players' data from the server.
                     match deserialize(&buffer[..]) {
-                        Ok(msg) => {
-                            let msg: HashMap<String, PlayerInfo> = msg;
-                            for (name, plinfo) in msg { // We update the players to their newest state.
-                                players.insert(name.clone(), plinfo.clone());
+                        Ok(m) => {
+                            if let MessageType::ANNOUNCEMENT(inner) = m {
+                                //sender.send(([ROOM_WIDTH/2, 200], inner));
+                                announcement = inner;
+                                announcer_counter = 10;
+                            } else {
+                                let mut buffer = vec![0;512];
+                                match connection.read(&mut buffer) {
+                                    Ok(_) => {
+                                        match deserialize(&buffer[..]) {
+                                            Ok(infos) => {
+                                                let infos: HashMap<String, PlayerInfo> = infos;
+                                                
+                                                for (name, plinfo) in infos {
+                                                    players.insert(name.clone(), plinfo.clone());
+                                                }
+                                            },
+                                            Err(_) => {}
+                                        }
+                                    },
+                                    Err(_) => {}
+                                }
                             }
                         },
+                        
                         Err(_) => {}
-                    }
+                    };
                 },
-                Err(e) => {
-                    use std::io::ErrorKind;
-                    if e.kind() == ErrorKind::ConnectionAborted || e.kind() == ErrorKind::ConnectionReset {
-                        println!("Connection terminated. Please reconnect!");
-                        process::exit(0);
-                    }
-                }
+                
+                Err(_) => {}
             };
             
             // If our character is on the same screen as some other player, we send their location for the renderer thread.
             for (_, vals) in &players { if vals.location == pos && pos[0] != 0 {sender.send((vals.position, vals.name.clone())).unwrap();}}
+            if announcer_counter != 0 {
+                sender.send(([25, 40], announcement.clone())).unwrap();
+                announcer_counter -= 1;
+            }
             
             // Finally, we sleep to be less straining on the PC.
             thread::sleep(time::Duration::from_millis(200));

@@ -22,8 +22,14 @@ struct PlayerInfo {
     position: [u16; 2]
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+enum MessageType {
+    PLAYERSTATES,
+    ANNOUNCEMENT(String)
+}
+
 // This function handles every client.
-fn handle_client(name: String, mut stream: TcpStream, streams: Arc<Mutex<HashMap<String, TcpStream>>>, player_list: Arc<Mutex<HashMap<String, PlayerInfo>>>, have_to: Sender<()>) {
+fn handle_client(name: String, mut stream: TcpStream, streams: Arc<Mutex<HashMap<String, TcpStream>>>, player_list: Arc<Mutex<HashMap<String, PlayerInfo>>>, have_to: Sender<MessageType>) {
     use std::io::Read;
 
     // We read the data sent by the players into this buffer.
@@ -40,9 +46,8 @@ fn handle_client(name: String, mut stream: TcpStream, streams: Arc<Mutex<HashMap
                 streams.lock().unwrap().remove(&name);
                 return;
             },
-            Ok(val) => {
+            Ok(_) => {
                 // We turn the raw bytes sent by the player into a PlayerInfo struct using Serde.
-                println!("{}", val);
                 let plinfo: Result<PlayerInfo, _> = deserialize(&buf[..]);
                 
                 if let Ok(plinfo) = plinfo {
@@ -60,7 +65,7 @@ fn handle_client(name: String, mut stream: TcpStream, streams: Arc<Mutex<HashMap
                         plist.insert(plinfo.name.clone(), plinfo);
                         
                         // And we notify the announcer thread, that it's time to send data to the players.
-                        let _ = have_to.send(());
+                        let _ = have_to.send(MessageType::PLAYERSTATES);
                     }
                 } else {}
             },
@@ -78,43 +83,48 @@ fn handle_client(name: String, mut stream: TcpStream, streams: Arc<Mutex<HashMap
     }
 }
 
-// This function communicates with all the clients. It's job is to send every players' data to the clients.
-fn announcer(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Receiver<()>, player_infos: Arc<Mutex<HashMap<String, PlayerInfo>>>) {
+fn write_or_drop(streams: &mut HashMap<String, TcpStream>, bytes: Vec<u8>) {
     use std::io::Write;
+
+    streams.retain(
+        |_, stream| {
+            match stream.write_all(bytes.as_slice()) {
+                Ok(_) => true,                    
+                Err(e) => {
+                    if e.kind() != ErrorKind::TimedOut {
+                        println!("Error. Dropping host.");
+                        return false;
+                    }
+                    true
+                }
+            }
+        }
+    );
+}
+
+// This function communicates with all the clients. It's job is to send every players' data to the clients.
+fn announcer(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Receiver<MessageType>, player_infos: Arc<Mutex<HashMap<String, PlayerInfo>>>) {
+    
 
     loop {
         // recv() will block until it receives a signal. Which means this loop will be on standby, until we request it to do it's job.
         // We do this with 'have_to.send(())'
-        have_to.recv().unwrap();
+        let msgtype = have_to.recv().unwrap();
         
         // We lock the Mutex containing all the TcpStreams, letting us reach it's contents.
         let streams_unlocked = &mut *streams.lock().unwrap();
-        
-        // We turn the HashMap into raw bytes. This will be what we will send to each client.
-        let bytes: Vec<u8> = serialize(&*player_infos.lock().unwrap()).unwrap();
-        streams_unlocked.retain(
-            |name, stream| {
-                let written = stream.write_all(bytes.as_slice());
-                
-                match written {
-                    Ok(_) => true,                    
-                    Err(e) => {
-                        if e.kind() != ErrorKind::TimedOut {
-                            println!("Error. Dropping host.");
-                            return false;
-                        }
-                        true
-                    }
-                }
-            }
-        );
-        
-        //thread::sleep(time::Duration::from_millis(200));
+
+        write_or_drop(streams_unlocked, serialize(&msgtype).unwrap());
+        if msgtype == MessageType::PLAYERSTATES {
+                // We turn the HashMap into raw bytes. This will be what we will send to each client.
+                let bytes: Vec<u8> = serialize(&*player_infos.lock().unwrap()).unwrap();
+                write_or_drop(streams_unlocked, bytes);
+        }
     }
 }
 
 // This function serves as a kind of "console". We can use it to issue some commands to the server.
-fn console(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Sender<()>, muds: Arc<Mutex<HashMap<String, PlayerInfo>>>) {
+fn console(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Sender<MessageType>, muds: Arc<Mutex<HashMap<String, PlayerInfo>>>) {
     use std::io::{self, BufRead, Write};
     use std::process;
     use  std::net::Shutdown;
@@ -163,7 +173,12 @@ fn console(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Sender<()>,
                     println!("Usage: kick [name]");
                 }
             },
-            "announce" => {let _ = have_to.send(()); println!("Flag set. Sending data...");},
+            "states" => {let _ = have_to.send(MessageType::PLAYERSTATES); println!("Flag set. Sending data...");},
+            "announce" => {
+                let msg = line.clone().split_off(split[0].len() + 1);
+                println!("{}", msg);
+                let _ = have_to.send(MessageType::ANNOUNCEMENT(msg));
+            },
             "players" => {
                 let locked = &*muds.lock().unwrap();
                 
@@ -183,7 +198,7 @@ fn console(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Sender<()>,
                 }
             },
             "help" => {
-                println!("shutdown/quit/exit - Shuts the server down.\r\nkick [name] - Kicks a player from the server.\r\nannounce - Manually set the 'send player data' flag.\r\nplayers - Shows statistics about each connected player.\r\nips - Shows the IP-s of the connected players.");
+                println!("shutdown/quit/exit - Shuts the server down.\r\nkick [name] - Kicks a player from the server.\r\nannounce - Send a message to all players\r\nstates - Manually set the 'send player data' flag.\r\nplayers - Shows statistics about each connected player.\r\nips - Shows the IP-s of the connected players.");
             },
             "" => {}, // If the player hasn't entered anything, we should just loop.
             _ => {println!("Unrecognized command. Use 'help' to see the list of commands.");}
@@ -221,7 +236,7 @@ fn main() -> std::io::Result<()> {
     for stream in listener.incoming() {
         if let Ok(mut stream) = stream {
             let mut namebuf = [0; 256];
-            stream.read(&mut namebuf);
+            stream.read(&mut namebuf).unwrap();
             let name: String = deserialize(&namebuf).unwrap();
             println!("Player '{}' joined the game.", name);
             
