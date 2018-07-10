@@ -56,60 +56,86 @@ fn read_line(prompt: &str) -> String {
     retval
 }
 
+fn read_name() -> String {
+    loop {
+        let candidate = read_line("Enter your name:");
+        
+        if candidate.chars().all(|c| {c.is_ascii() && !c.is_whitespace()}) && !candidate.is_empty() && candidate.len() >= 3 {
+            return candidate;
+        } else {
+            println!("The name you entered contains invalid characters. Please try again.");
+        }
+    }
+}
+
 // Connects to the server. Currently the port is fixed, but this would be easy to fix.
-// TODO: Make the client/server port agnostic.
-fn make_connection() -> TcpStream {
+// TODO: Make the server port agnostic.
+fn make_connection(name: String) -> TcpStream {
     let ip = read_line("Enter the server's IP: ");
     
-    println!("Connecting to {}:2536", ip);
-    let connection = match TcpStream::connect(format!("{}:2536", ip)) {
-        Ok(s) => {println!("Connection successful.\n\n"); s},
+    /* Uncomment to prompt for port */
+    let port_inp = ""; //read_line("Enter port (or press enter for default: 2536): "); 
+    let port = match port_inp.as_ref() {
+        "" => "2536",
+        port => &port
+    };
+    
+    println!("Connecting to {}:{}", ip, port);
+    let connection = match TcpStream::connect(format!("{}:{}", ip, port)) {
+        Ok(mut s) => {
+            println!("Connection successful. Sending '{}' as name.", name); 
+            let _ = s.write(&serialize(&name).unwrap());
+            s
+        },
         Err(e) => {println!("Connection error: {:?}", e.kind()); process::exit(1);}
     };
-    connection.set_read_timeout(Some(time::Duration::from_millis(100))).unwrap();
-    
+       
+    connection.set_read_timeout(Some(time::Duration::from_millis(400))).unwrap();
     connection
 }
 
 // Now this is where things get a bit more interesting. This function renders red rectangles at the location of every player.
-fn render_players(relativexy: Receiver<[u16; 2]>) {
+fn render_players(player_data: Receiver<([u16; 2], String)>) {
     use winapi::shared::windef::RECT;
     use winapi::um::winuser::GetWindowRect;
+    
+    //use winapi::um::wingdi::*;
 
     unsafe {
-    let oddapp = FindWindowW(null_mut(), into_os("Oddworld Abe's Exoddus").as_ptr()); // HWND to the game's window.
-    let hdc = winapi::um::winuser::GetDC(oddapp);
-    
-    let mut winrect = RECT {left: 0, top: 0, right: 0, bottom: 0};
-    GetWindowRect(oddapp, &mut winrect); // We query the window to get it's dimensions. Should be about 600x800, but it varies.
-    
-    let PROPORTION_W: f64 = (winrect.right - winrect.left) as f64 / ROOM_WIDTH as f64;
-    let PROPORTION_H: f64 = (winrect.bottom - winrect.top) as f64 / ROOM_HEIGHT as f64;
-    
-    let brush = winapi::um::wingdi::CreateSolidBrush(winapi::um::wingdi::RGB(255, 0, 0)); // We create the aforementioned red color for our rectangle.
-    winapi::um::wingdi::SelectObject(hdc, brush as LPVOID);
-    
-    loop {
-        let relativexy = relativexy.recv().unwrap(); // When the main thread sends us coordinates, we receive them into this array.
+        let oddapp = FindWindowW(null_mut(), into_os("Oddworld Abe's Exoddus").as_ptr()); // HWND to the game's window.
+        let hdc = winapi::um::winuser::GetDC(oddapp);
+
+        let mut winrect = RECT {left: 0, top: 0, right: 0, bottom: 0};
+
+        //let brush = winapi::um::wingdi::CreateSolidBrush(winapi::um::wingdi::RGB(255, 0, 0)); // We create the aforementioned red color for our rectangle.
+        //winapi::um::wingdi::SelectObject(hdc, brush as LPVOID);
         
-        // And we draw a rectangle. The sizes are mostly done in a "what looks good fashion".
-        
-        if relativexy[0] != 0 && relativexy[1] != 0 {
-            winapi::um::wingdi::Rectangle(
-                hdc,
-                ((relativexy[0] as i16 - 8) as f64 * PROPORTION_W) as i32,
-                ((relativexy[1] as i16 - 32) as f64 * PROPORTION_H) as i32,
-                ((relativexy[0] + 10) as f64 * PROPORTION_W) as i32,
-                ((relativexy[1] - 16) as f64 * PROPORTION_H) as i32);
-            };
+        loop {
+            let (relativexy, name) = player_data.recv().unwrap(); // When the main thread sends us coordinates, we receive them into this array.
             
-            let name = "TESZT";
-            let name = into_os(name);
-            winapi::um::wingdi::TextOutW(
-                hdc, 
-                ((relativexy[0] as i16 - 10) as f64 * PROPORTION_W) as i32, 
-                ((relativexy[1] as i16 - 20) as f64 * PROPORTION_W) as i32, 
-                name.as_ptr(), name.len() as i32 - 1);
+            GetWindowRect(oddapp, &mut winrect); // We query the window to get it's dimensions. Should be about 600x800, but it varies.
+
+            let proportion_w: f64 = (winrect.right - winrect.left) as f64 / ROOM_WIDTH as f64;
+            let proportion_h: f64 = (winrect.bottom - winrect.top) as f64 / ROOM_HEIGHT as f64;
+            
+            // And we draw a rectangle. The sizes are mostly done in a "what looks good fashion".
+            if relativexy[0] != 0 && relativexy[1] != 0 {
+                /*
+                winapi::um::wingdi::Rectangle(
+                    hdc,
+                    ((relativexy[0] as i16 - 8) as f64 * proportion_w) as i32,
+                    ((relativexy[1] as i16 - 32) as f64 * proportion_h) as i32,
+                    ((relativexy[0] + 10) as f64 * proportion_w) as i32,
+                    ((relativexy[1] - 16) as f64 * proportion_h) as i32);
+                */
+
+                let name = into_os(&name);
+                winapi::um::wingdi::TextOutW(
+                    hdc, 
+                    ((relativexy[0] as i16 - 10) as f64 * proportion_w) as i32, 
+                    ((relativexy[1] as i16 - 30) as f64 * proportion_h) as i32, 
+                    name.as_ptr(), name.len() as i32 - 1);
+            }
         }
     }
 }
@@ -134,8 +160,9 @@ fn main() {
         // You might be wondering about this pattern where I make explicit pointers to the variables.
         // It's not my sillyness, Rust demands you to be this precise. This results in a few unnecessary lines of code.
         
+        // Intentionally set to one, so the client updates as soon as possible.
         let mut saved_muds: u16 = 0;
-        let mut previously_muds: u16 = 0;
+        let mut previously_muds: u16 = 1; 
         let saved_mudsp: *mut u16 = &mut saved_muds;
         
         let mut pos: [u16; 3] = [0; 3];
@@ -143,8 +170,8 @@ fn main() {
         
         let mut prevhero: [u16; 2] = [0; 2];
         
-        let name = read_line("Enter your name: ");
-        let mut connection = make_connection();
+        let name = read_name();
+        let mut connection = make_connection(name.clone());
 
         let (sender, receiver) = channel();
         
@@ -153,16 +180,14 @@ fn main() {
         
         ////// This is some confusing mess. //////
         
-        /*
-        Writing this was a real pain. Mostly I pointer juggled, until finally I understood how it should be done.
+        /* Writing this was a real pain. Mostly I pointer juggled, until finally I understood how it should be done.
         If you want to understand how this works, I suggest that you read through 'second.cpp' 
         and insert the values below this into something like Cheat Engine.
         For CE to work, you'll need a Pointer, with two offsets and you have to read 2 bytes. The first (lower) offset is always 0x68.
-        But as I said, this was mostly shooting in the dark, so if by any chance, you're struggling, it's ok mate. I did too.
+        But as I said, this was mostly shooting in the dark, so if by any chance, you're struggling, it's ok mate. I did too. */
         
-        Abe_x --- Exoddus.exe+0x1C1230, 0x68, 0xBA
-        Abe_y --- Exoddus.exe+0x1C1230, 0x68, 0xBE
-        */
+        // Abe_x --- Exoddus.exe+0x1C1230, 0x68, 0xBA
+        // Abe_y --- Exoddus.exe+0x1C1230, 0x68, 0xBE
         
         use winapi::um::psapi::MODULEINFO;
         use winapi::um::psapi::GetModuleInformation;
@@ -217,18 +242,16 @@ fn main() {
             let relativexy: [u16; 2] = [xpos % ROOM_WIDTH, ypos % ROOM_HEIGHT];      
 
             // If anything changed (Abe moved, Mudokons were saved, Abe left the screen), we update the variables and we send the data to the server.
-            if previously_muds != saved_muds || prevpos != pos || prevhero != relativexy {
+            // ˘Title screen check˘: If we're on the title screen, we don't want to send data.
+            if (pos[0] != 0 || relativexy != [0,0]) && previously_muds != saved_muds || prevpos != pos || prevhero != relativexy {
                 prevpos = pos;
                 previously_muds = saved_muds;
                 prevhero = relativexy;
                 
-                // Title screen check: If we're on the title screen, we don't want to send data.
-                if pos[0] != 0 || relativexy != [0,0] { 
-                    // This will be sent to the server.
-                    let payload = PlayerInfo {name: name.clone(), saved_muds: saved_muds, location: pos, position: relativexy};
-                    let bytes: Vec<u8> = serialize(&payload).unwrap(); // We use the Serde Bincode crate for this.
-                    connection.write_all(bytes.as_slice()).unwrap();
-                }
+                // This will be sent to the server.
+                let payload = PlayerInfo {name: name.clone(), saved_muds: saved_muds, location: pos, position: relativexy};
+                let bytes: Vec<u8> = serialize(&payload).unwrap(); // We use the Serde Bincode crate for this.
+                connection.write_all(bytes.as_slice()).unwrap();
             }
 
             // This buffer contains the raw data the server sends us.
@@ -236,17 +259,27 @@ fn main() {
             match connection.read(&mut buffer) {
                 Ok(_) => {
                     // We receive all the players' data from the server.
-                    let msg: HashMap<String, PlayerInfo> = deserialize(&buffer[..]).unwrap();
-                    
-                    for (name, plinfo) in msg { // We update the players to their newest state.
-                        players.insert(name.clone(), plinfo.clone());
+                    match deserialize(&buffer[..]) {
+                        Ok(msg) => {
+                            let msg: HashMap<String, PlayerInfo> = msg;
+                            for (name, plinfo) in msg { // We update the players to their newest state.
+                                players.insert(name.clone(), plinfo.clone());
+                            }
+                        },
+                        Err(_) => {}
                     }
                 },
-                _ => {}
+                Err(e) => {
+                    use std::io::ErrorKind;
+                    if e.kind() == ErrorKind::ConnectionAborted || e.kind() == ErrorKind::ConnectionReset {
+                        println!("Connection terminated. Please reconnect!");
+                        process::exit(0);
+                    }
+                }
             };
             
             // If our character is on the same screen as some other player, we send their location for the renderer thread.
-            for (_, vals) in &players { if vals.location == pos {sender.send(vals.position).unwrap();}}
+            for (_, vals) in &players { if vals.location == pos && pos[0] != 0 {sender.send((vals.position, vals.name.clone())).unwrap();}}
             
             // Finally, we sleep to be less straining on the PC.
             thread::sleep(time::Duration::from_millis(200));
