@@ -28,6 +28,33 @@ enum MessageType {
   ANNOUNCEMENT(String)
 }
 
+const LEVEL_NAMES: &[&str] = &[
+  "Necrum Mines",
+  "Necrum",
+  "Mudomo Vault",
+  "Mudanchee Vault",
+  "FeeCo Depot",
+  "Slig Barracks",
+  "Mudanchee ender",
+  "Bonewerkz",
+  "SoulStorm Brewery",
+  "Soultorm Brewery ender",
+  "Mudomo Vault ender",
+  "FeeCo Depot ender",
+  "Slig Barracks ender",
+  "Bonewerkz ender"
+];
+
+const HELP_MSG: &'static str = "
+shutdown/quit/exit - Shuts the server down.
+kick [name] - Kicks a player from the server.
+announce - Send a message to all players
+states - Manually set the 'send player data' flag.
+players - Shows statistics about each connected player.
+ips - Shows the IP-s of the connected players.
+clear - Clears the console. (Will probably not work using cmd.exe)
+";
+
 // This function handles every client.
 fn handle_client(name: String, mut stream: TcpStream, streams: Arc<Mutex<HashMap<String, TcpStream>>>, player_list: Arc<Mutex<HashMap<String, PlayerInfo>>>, have_to: Sender<MessageType>) {
   use std::io::Read;
@@ -54,19 +81,29 @@ fn handle_client(name: String, mut stream: TcpStream, streams: Arc<Mutex<HashMap
           // We lock the player_list mutex, letting us edit the HashMap containing all the players' data.
           let mut plist = player_list.lock().unwrap();
           
+          /*
           // We read the previous entry's state.
           let (prev_muds, prev_loc, prev_pos) = match plist.get(&plinfo.name) {
             Some(info) => (info.saved_muds, info.location, info.position),
             None => (0, [0,0,0], [0,0])
           };
+          */
           
           // If anything changed, we update the values.
-          if plinfo.position != prev_pos || plinfo.location != prev_loc || plinfo.saved_muds != prev_muds {
-            plist.insert(plinfo.name.clone(), plinfo);
+          //if plinfo.position != prev_pos || plinfo.location != prev_loc || plinfo.saved_muds != prev_muds {
+            let old_info = plist.insert(plinfo.name.clone(), plinfo.clone());
             
             // And we notify the announcer thread, that it's time to send data to the players.
-            let _ = have_to.send(MessageType::PLAYERSTATES);
-          }
+            if let Some(old) = old_info {
+              if old != plinfo {
+                if old.location[0] != plinfo.location[0] && plinfo.location[0] != 0 {
+                  let _ = have_to.send(MessageType::ANNOUNCEMENT(format!("{} has entered {}", plinfo.name, LEVEL_NAMES[*&plinfo.location[0] as usize - 1])));
+                }
+              }
+              
+              let _ = have_to.send(MessageType::PLAYERSTATES);
+            }
+          //}
         } else {}
       },
       
@@ -83,8 +120,11 @@ fn handle_client(name: String, mut stream: TcpStream, streams: Arc<Mutex<HashMap
   }
 }
 
+// This function provides a convenient way to try to send data to a client.
+// If the client refuses, we simply drop his connection, because he is probably already disconnected.
 fn write_or_drop(streams: &mut HashMap<String, TcpStream>, bytes: Vec<u8>) {
   use std::io::Write;
+  use std::net::Shutdown::Both;
 
   streams.retain(
     |_, stream| {
@@ -92,6 +132,7 @@ fn write_or_drop(streams: &mut HashMap<String, TcpStream>, bytes: Vec<u8>) {
         Ok(_) => true,          
         Err(e) => {
           if e.kind() != ErrorKind::TimedOut {
+            stream.shutdown(Both).unwrap();
             println!("Error. Dropping host.");
             return false;
           }
@@ -104,11 +145,9 @@ fn write_or_drop(streams: &mut HashMap<String, TcpStream>, bytes: Vec<u8>) {
 
 // This function communicates with all the clients. It's job is to send every players' data to the clients.
 fn announcer(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Receiver<MessageType>, player_infos: Arc<Mutex<HashMap<String, PlayerInfo>>>) {
-  
-
   loop {
     // recv() will block until it receives a signal. Which means this loop will be on standby, until we request it to do it's job.
-    // We do this with 'have_to.send(())'
+    // We do this with 'have_to.send(MessageType)'
     let msgtype = have_to.recv().unwrap();
     
     // We lock the Mutex containing all the TcpStreams, letting us reach it's contents.
@@ -154,12 +193,16 @@ fn console(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Sender<Mess
             
             match line.as_str().trim() {
               "yes" | "y" | "Y" | "Yes" | "YES" => {
+                //First we remove their PlayerInfo struct from the HashMap.
                 muds.lock().unwrap().remove(split[1]);
                 
+                //Then we shut their connection off.
+                //TODO: Send "You are disconnected" signal here?
                 if let Some(shut) = streams.lock().unwrap().get(split[1]) {
                   shut.shutdown(Shutdown::Both).unwrap();
                 }
                 
+                //Finally we remove the now defunct connection from the HashMap and notify the server's owner.
                 streams.lock().unwrap().remove(split[1]);
                 println!("{} kicked.", split[1]);
               },
@@ -174,7 +217,13 @@ fn console(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Sender<Mess
         }
       },
       "states" => {let _ = have_to.send(MessageType::PLAYERSTATES); println!("Flag set. Sending data...");},
+      "clear" | "c" => {
+        //Sucks to be this guy ˘
+        println!("If this doesn't clean your console then you're using an outdated console. Please use PowerShell.{}[2;J", 27 as char);
+      }
       "announce" => {
+        //'msg' will contain everything after the first space. So if the input was "announce this is a test message",
+        //then msg == "this is a test message".
         let msg = line.clone().split_off(split[0].len() + 1);
         println!("{}", msg);
         let _ = have_to.send(MessageType::ANNOUNCEMENT(msg));
@@ -192,14 +241,11 @@ fn console(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Sender<Mess
         let locked = &*streams.lock().unwrap();
         
         println!("There are {} connected players.\r\n", locked.len());
-        
         for (name, stream) in locked.iter() {
           println!("[{}]: {}", name, stream.peer_addr().unwrap());
         }
       },
-      "help" => {
-        println!("shutdown/quit/exit - Shuts the server down.\r\nkick [name] - Kicks a player from the server.\r\nannounce - Send a message to all players\r\nstates - Manually set the 'send player data' flag.\r\nplayers - Shows statistics about each connected player.\r\nips - Shows the IP-s of the connected players.");
-      },
+      "help" => {println!("{}", HELP_MSG);},
       "" => {}, // If the player hasn't entered anything, we should just loop.
       _ => {println!("Unrecognized command. Use 'help' to see the list of commands.");}
     }

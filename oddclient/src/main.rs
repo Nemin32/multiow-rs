@@ -66,10 +66,16 @@ fn read_name() -> String {
   loop {
     let candidate = read_line("Enter your name:");
     
-    if candidate.chars().all(|c| {c.is_ascii() && !c.is_whitespace()}) && !candidate.is_empty() && candidate.len() >= 3 {
+    // I have no problems with creative names, but imagine if a guy named "úőéúőéőé éőúéééúpúpéópü" comes up to your server. 
+    // How would you do anything to them? Sure, you could probably copy-paste the name, but the enter is still there.
+    // To circumvent this, the rules are the following:
+    // - ASCII only
+    // - No whitespace
+    // - Longer than 2 characters, but shorter than 9.
+    if candidate.chars().all(|c| {c.is_ascii() && !c.is_whitespace()}) && candidate.len() >= 3 && candidate.len() <= 8 {
       return candidate;
     } else {
-      println!("The name you entered contains invalid characters. Please try again.");
+      println!("The name you entered is invalid.\r\nPlease only use ASCII characters and no spaces.\r\nThe name's length should be between 3 and 8 characters.");
     }
   }
 }
@@ -100,47 +106,45 @@ fn make_connection(name: String) -> TcpStream {
   connection
 }
 
-// Now this is where things get a bit more interesting. This function renders red rectangles at the location of every player.
+macro_rules! into_proportion {
+  ($val:expr, $offset:expr, $prop:ident) => {(($val as i16 + $offset) as f64 * $prop) as i32};
+}
+// Now this is where things get a bit more interesting. This function renders names in white boxes for each player.
 fn render_players(player_data: Receiver<([u16; 2], String)>) {
   use winapi::shared::windef::RECT;
   use winapi::um::winuser::GetWindowRect;
-  
-  //use winapi::um::wingdi::*;
 
   unsafe {
     let oddapp = FindWindowW(null_mut(), into_os("Oddworld Abe's Exoddus").as_ptr()); // HWND to the game's window.
     let hdc = winapi::um::winuser::GetDC(oddapp);
-
     let mut winrect = RECT {left: 0, top: 0, right: 0, bottom: 0};
 
-    //let brush = winapi::um::wingdi::CreateSolidBrush(winapi::um::wingdi::RGB(255, 0, 0)); // We create the aforementioned red color for our rectangle.
-    //winapi::um::wingdi::SelectObject(hdc, brush as LPVOID);
-    
     loop {
-      let (relativexy, name) = player_data.recv().unwrap(); // When the main thread sends us coordinates, we receive them into this array.
+      // When the main thread sends us coordinates, we receive them into this array.
+      let (relativexy, name) = player_data.recv().unwrap(); 
       
-      GetWindowRect(oddapp, &mut winrect); // We query the window to get it's dimensions. Should be about 600x800, but it varies.
-
+      // We query the window to get it's dimensions. Should be about 600x800, but it varies.
+      GetWindowRect(oddapp, &mut winrect); 
       let proportion_w: f64 = (winrect.right - winrect.left) as f64 / ROOM_WIDTH as f64;
       let proportion_h: f64 = (winrect.bottom - winrect.top) as f64 / ROOM_HEIGHT as f64;
       
-      // And we draw a rectangle. The sizes are mostly done in a "what looks good fashion".
+      let invalid = RECT {
+        left: into_proportion!(relativexy[0], -10, proportion_w),//((relativexy[0] as i16 - 10) as f64 * proportion_w) as i32, 
+        top: into_proportion!(relativexy[1], -30, proportion_h),//((relativexy[1] as i16 - 30) as f64 * proportion_h) as i32, 
+        right: into_proportion!(relativexy[0], 40, proportion_w),//((relativexy[0] as i16 + 40) as f64 * proportion_w) as i32, 
+        bottom: into_proportion!(relativexy[1],20, proportion_h)
+      };
+      
+      let inp: *const RECT = &invalid;
       if relativexy[0] != 0 && relativexy[1] != 0 {
-        /*
-        winapi::um::wingdi::Rectangle(
-          hdc,
-          ((relativexy[0] as i16 - 8) as f64 * proportion_w) as i32,
-          ((relativexy[1] as i16 - 32) as f64 * proportion_h) as i32,
-          ((relativexy[0] + 10) as f64 * proportion_w) as i32,
-          ((relativexy[1] - 16) as f64 * proportion_h) as i32);
-        */
-
         let name = into_os(&name);
+        winapi::um::winuser::ValidateRect(oddapp, inp);
         winapi::um::wingdi::TextOutW(
-          hdc, 
-          ((relativexy[0] as i16 - 10) as f64 * proportion_w) as i32, 
-          ((relativexy[1] as i16 - 30) as f64 * proportion_h) as i32, 
-          name.as_ptr(), name.len() as i32 - 1);
+          hdc,
+          into_proportion!(relativexy[0], -10, proportion_w), 
+          into_proportion!(relativexy[1], -30, proportion_h), 
+          name.as_ptr(), name.len() as i32 - 1
+        );
       }
     }
   }
@@ -154,7 +158,7 @@ fn main() {
     // Since we aren't actually writing anything into the game's memory, these are all the privieges we need.
     let access: DWORD = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION; 
 
-    if oddapp == null_mut() /*false*/ { // Set this to just 'false' to avoid the check.
+    if oddapp == null_mut() { // If you want to debug stuff just set this line to 'false' to avoid the check.
       println!("You need to run Exoddus.exe before starting this program.");
       process::exit(1);
     } 
@@ -223,7 +227,7 @@ fn main() {
     
     // This HashMap contains the players' data. See PlayerInfo struct.
     let mut players: HashMap<String, PlayerInfo> = HashMap::new();
-    let mut announcement: String = String::new();
+    let mut announcement = String::new();
     let mut announcer_counter = 0;
     
     loop {
@@ -236,6 +240,16 @@ fn main() {
       // Reading the current LVL/Path/CAM ID-s.
       ReadProcessMemory(handle, 0x5C3030 as LPCVOID, pos.as_mut_ptr() as LPVOID, size_of::<u16>() * 3, null_mut());
       
+      // As the message states this is a really painful thing, but what could I do?
+      // OWI, I like you, but ALIVE is messed up.
+      if pos[0] == 0 {
+        use std::net::Shutdown::Both;
+        println!("\r\nBecause of an engine limitation returning\r\nto the main menu messes up the player position tracker.");
+        println!("For this reason the app will now exit.\r\nPlease restart it when you entered a map. Sorry for this!");
+        connection.shutdown(Both).unwrap();
+        process::exit(1);
+      }
+
       // We offset the pointer by 0xBA and thus we can read the X coordinate.
       ReadProcessMemory(handle, pos_base as LPCVOID, pp as LPVOID, size_of::<u32>(), null_mut());
       ReadProcessMemory(handle, (pointer + 0xBA) as LPCVOID, xp as LPVOID, size_of::<u16>(), null_mut());
@@ -247,11 +261,13 @@ fn main() {
       // The player coordinates are absolute values. The top left of the *entire map* is [0, 0], not the current room.
       // To turn the coordinates into the format we need 
       // We modulo the xpos and the ypos we get a value between [0, 0] and [ROOM_WIDTH, ROOM_HEIGHT].
-      let relativexy: [u16; 2] = [xpos % ROOM_WIDTH, ypos % ROOM_HEIGHT];    
+      let relativexy = [xpos % ROOM_WIDTH, ypos % ROOM_HEIGHT];    
+
+      
 
       // If anything changed (Abe moved, Mudokons were saved, Abe left the screen), we update the variables and we send the data to the server.
       // ˘Title screen check˘: If we're on the title screen, we don't want to send data.
-      if (pos[0] != 0 || relativexy != [0,0]) && previously_muds != saved_muds || prevpos != pos || prevhero != relativexy {
+      if relativexy != [0,0] && previously_muds != saved_muds || prevpos != pos || prevhero != relativexy {
         prevpos = pos;
         previously_muds = saved_muds;
         prevhero = relativexy;
@@ -259,7 +275,17 @@ fn main() {
         // This will be sent to the server.
         let payload = PlayerInfo {name: name.clone(), saved_muds: saved_muds, location: pos, position: relativexy};
         let bytes: Vec<u8> = serialize(&payload).unwrap(); // We use the Serde Bincode crate for this.
-        connection.write_all(bytes.as_slice()).unwrap();
+        
+        match connection.write_all(bytes.as_slice()) {
+          Ok(_) => {},
+          Err(e) => {
+            use std::io::ErrorKind;
+            if e.kind() == ErrorKind::ConnectionAborted {
+              println!("Lost connection. Please reconnect!");
+              process::exit(0);
+            }
+          }
+        };
       }
 
       
@@ -268,17 +294,25 @@ fn main() {
       match connection.read(&mut buffer) {
         Ok(_) => {
           if let Ok(m) = deserialize(&buffer[..]) {
-            if let MessageType::ANNOUNCEMENT(inner) = m {
-              println!("The server sent this message \"{}\"", &inner.trim());
-              announcement = inner;
-              announcer_counter = 20;
-            } else {
-              let mut buffer = vec![0;512];
-              if let Ok(_) = connection.read(&mut buffer) {
-                if let Ok(infos) = deserialize(&buffer[..]) {
-                  let infos: HashMap<String, PlayerInfo> = infos;
-                  for (name, plinfo) in infos {
-                    players.insert(name.clone(), plinfo.clone());
+            match m {
+              MessageType::ANNOUNCEMENT(inner) => {
+                println!("The server sent this message \"{}\"", &inner.trim());
+                announcement = inner;
+
+                // One "unit" is 200 milliseconds currently. (See the thread::sleep at the end).
+                // So currently this message is displayed for 4000 milliseconds or 4 seconds.
+                // TODO: Maybe this should have a better interface. A macro perhaps? Or just a constant?
+                announcer_counter = 20; 
+              },
+
+              MessageType::PLAYERSTATES => {
+                let mut buffer = vec![0;512];
+                if let Ok(_) = connection.read(&mut buffer) {
+                  if let Ok(infos) = deserialize(&buffer[..]) {
+                    let infos: HashMap<String, PlayerInfo> = infos;
+                    for (name, plinfo) in infos {
+                      players.insert(name.clone(), plinfo.clone());
+                    }
                   }
                 }
               }
@@ -288,7 +322,7 @@ fn main() {
         Err(e) => {
           use std::io::ErrorKind;
           if e.kind() == ErrorKind::ConnectionAborted {
-            println!("Connection aborted. Please reconnect!");
+            println!("Lost connection. Please reconnect!");
             process::exit(0);
           }
         }
@@ -296,7 +330,10 @@ fn main() {
       
       // If our character is on the same screen as some other player, we send their location for the renderer thread.
       for (_, vals) in &players { if vals.location == pos && pos[0] != 0 {sender.send((vals.position, vals.name.clone())).unwrap();}}
+      
+      // If there is a current announcement, we send it to the rendering thread and then decrement the counter.
       if announcer_counter != 0 {
+        // The coordinates were chosen pretty arbitarily, but it looks good, so I kept it.
         sender.send(([25, 40], announcement.clone())).unwrap();
         announcer_counter -= 1;
       }
