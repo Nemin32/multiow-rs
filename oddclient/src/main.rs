@@ -1,4 +1,5 @@
 #[cfg(windows)] extern crate winapi;
+use winapi::shared::basetsd::LONG_PTR;
 use std::net::TcpStream;
 use std::{thread, time};
 use std::io::Write;
@@ -111,47 +112,141 @@ macro_rules! into_proportion {
 }
 // Now this is where things get a bit more interesting. This function renders names in white boxes for each player.
 fn render_players(player_data: Receiver<([u16; 2], String)>) {
-  use winapi::shared::windef::RECT;
-  use winapi::um::winuser::GetWindowRect;
+  use winapi::shared::windef::*;
+  use winapi::um::winuser::*;
+  use winapi::um::wingdi::*;
 
   unsafe {
-    let oddapp = FindWindowW(null_mut(), into_os("Oddworld Abe's Exoddus").as_ptr()); // HWND to the game's window.
-    let hdc = winapi::um::winuser::GetDC(oddapp);
+    let oddapp = FindWindowW(null_mut(), into_os("Test").as_ptr()); // HWND to the game's window.
+
     let mut winrect = RECT {left: 0, top: 0, right: 0, bottom: 0};
+    let hdc = winapi::um::winuser::GetDC(oddapp);
 
     loop {
       // When the main thread sends us coordinates, we receive them into this array.
-      let (relativexy, name) = player_data.recv().unwrap(); 
+      
       
       // We query the window to get it's dimensions. Should be about 600x800, but it varies.
       GetWindowRect(oddapp, &mut winrect); 
       let proportion_w: f64 = (winrect.right - winrect.left) as f64 / ROOM_WIDTH as f64;
       let proportion_h: f64 = (winrect.bottom - winrect.top) as f64 / ROOM_HEIGHT as f64;
       
-      let invalid = RECT {
-        left: into_proportion!(relativexy[0], -10, proportion_w),//((relativexy[0] as i16 - 10) as f64 * proportion_w) as i32, 
-        top: into_proportion!(relativexy[1], -30, proportion_h),//((relativexy[1] as i16 - 30) as f64 * proportion_h) as i32, 
-        right: into_proportion!(relativexy[0], 40, proportion_w),//((relativexy[0] as i16 + 40) as f64 * proportion_w) as i32, 
-        bottom: into_proportion!(relativexy[1],20, proportion_h)
-      };
-      
-      let inp: *const RECT = &invalid;
-      if relativexy[0] != 0 && relativexy[1] != 0 {
-        let name = into_os(&name);
-        winapi::um::winuser::ValidateRect(oddapp, inp);
-        winapi::um::wingdi::TextOutW(
-          hdc,
-          into_proportion!(relativexy[0], -10, proportion_w), 
-          into_proportion!(relativexy[1], -30, proportion_h), 
-          name.as_ptr(), name.len() as i32 - 1
-        );
+      for (relativexy, name) in player_data.try_iter() { 
+        if relativexy[0] != 0 && relativexy[1] != 0 {
+          let name = into_os(&name);
+          
+          TextOutW(
+            hdc,
+            into_proportion!(relativexy[0], -10, proportion_w), 
+            into_proportion!(relativexy[1], -30, proportion_h), 
+            name.as_ptr(), name.len() as i32 - 1
+          );
+        }
       }
     }
   }
 }
 
+
+unsafe extern "system" fn wnd_proc(hwnd: winapi::shared::windef::HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+  use winapi::shared::windef::*;
+  use winapi::um::winuser::*;
+  use winapi::um::wingdi::*;
+  
+  let data: *mut Vec<u8> = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Vec<u8>;
+
+  let mut ps = PAINTSTRUCT{
+    hdc: null_mut(),
+    fErase: 0,
+    rcPaint: RECT {left: 0, top: 0, right: 0, bottom: 0},
+    fRestore: 0,
+    fIncUpdate: 0,
+    rgbReserved: [0; 32]
+  };
+
+  match msg {
+      WM_CLOSE => {DestroyWindow(hwnd); return 0;},
+      WM_DESTROY => {PostQuitMessage(0); return 0;},
+      WM_PAINT => {
+        let dc: HDC = BeginPaint(hwnd, &mut ps);
+        SetBkColor(dc, RGB(244, 244, 244));
+
+        let text = into_os(&format!("Hello world, {:?}", *data));
+
+        TextOutW(dc, 20, 40, text.as_ptr(), text.len() as i32);
+        EndPaint(hwnd, &ps);
+        return 0;
+      },
+      _ => {return DefWindowProcW(hwnd, msg, wparam, lparam);}
+  };
+}
+
+
+unsafe fn create_layered() {
+  use winapi::shared::windef::*;
+  use winapi::um::winuser::*;
+
+  let wc = WNDCLASSW {
+    style : CS_OWNDC|CS_VREDRAW|CS_HREDRAW,
+    lpfnWndProc : Some( wnd_proc ),
+    hInstance : null_mut(),
+    lpszClassName : into_os("MyWin").as_ptr(),
+    cbClsExtra : 0,
+    cbWndExtra : 0,
+    hIcon: null_mut(),
+    hCursor: null_mut(),
+    hbrBackground: null_mut(),
+    lpszMenuName: null_mut(),
+  };
+
+  RegisterClassW(&wc);
+
+  let oddapp = FindWindowW(null_mut(), into_os("Oddworld Abe's Exoddus").as_ptr());
+  let mut pos: RECT = RECT {left: 0, top: 0, right: 0, bottom: 0};
+  GetWindowRect(oddapp, &mut pos);
+
+  let win: HWND = CreateWindowExW(
+    WS_EX_LAYERED, 
+    into_os("MyWin").as_ptr(), 
+    into_os("Test").as_ptr(), 
+    WS_POPUP, 
+    pos.left + 5, pos.top+30, pos.right-pos.left - 5, pos.bottom-pos.top-30,
+    oddapp, 
+    null_mut(), null_mut(), null_mut()
+  );
+
+  if win == null_mut() {
+    println!("Angery");
+    std::process::exit(0);
+  }
+
+  let mut msg = MSG {
+    hwnd: null_mut(),
+    message: 0,
+    wParam: 0,
+    lParam: 0,
+    time: 0,
+    pt: POINT {x: 0, y: 0},
+  };
+
+  SetWindowLongPtrW(win, GWLP_USERDATA, Box::into_raw(Box::new(vec![1u8,2u8,3u8])) as LONG_PTR);
+  SetLayeredWindowAttributes(win, winapi::um::wingdi::RGB(0,0,0), 0, LWA_COLORKEY);
+  ShowWindow(win, SW_SHOWNORMAL);
+  UpdateWindow(win);
+
+  //let val: Box<u8> = ;
+  
+
+  while GetMessageW(&mut msg, win, 0, 0) > 0 {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+  }
+}
+
 fn main() {
   unsafe {
+    thread::spawn(|| create_layered());
+
     let oddapp = FindWindowW(null_mut(), into_os("Oddworld Abe's Exoddus").as_ptr()); // HWND to the window.
     let mut proc: DWORD = 0;
     

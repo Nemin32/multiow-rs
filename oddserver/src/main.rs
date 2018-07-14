@@ -22,12 +22,17 @@ struct PlayerInfo {
   position: [u16; 2]
 }
 
+// PLAYERSTATES = We should send the PlayerInfo-s to the players.
+// ANNOUNCEMENT = There is a message we want to send.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 enum MessageType {
   PLAYERSTATES,
   ANNOUNCEMENT(String)
 }
 
+// You might say "But Nemin... This is not how chapters follow each other!" and you'd be right.
+// However, for sume unknown reason, this is how the levels are numbered.
+// I was dumbfounded too, but I guess we just have to accept this...
 const LEVEL_NAMES: &[&str] = &[
   "Necrum Mines",
   "Necrum",
@@ -38,7 +43,7 @@ const LEVEL_NAMES: &[&str] = &[
   "Mudanchee ender",
   "Bonewerkz",
   "SoulStorm Brewery",
-  "Soultorm Brewery ender",
+  "Soultorm Brewery ender", // This is named "Game Ender" in-game. Maybe I should use that name too?
   "Mudomo Vault ender",
   "FeeCo Depot ender",
   "Slig Barracks ender",
@@ -46,6 +51,8 @@ const LEVEL_NAMES: &[&str] = &[
 ];
 
 const HELP_MSG: &'static str = "
+Available commands:
+
 shutdown/quit/exit - Shuts the server down.
 kick [name] - Kicks a player from the server.
 announce - Send a message to all players
@@ -76,35 +83,26 @@ fn handle_client(name: String, mut stream: TcpStream, streams: Arc<Mutex<HashMap
       Ok(_) => {
         // We turn the raw bytes sent by the player into a PlayerInfo struct using Serde.
         let plinfo: Result<PlayerInfo, _> = deserialize(&buf[..]);
-        
         if let Ok(plinfo) = plinfo {
           // We lock the player_list mutex, letting us edit the HashMap containing all the players' data.
           let mut plist = player_list.lock().unwrap();
-          
-          /*
-          // We read the previous entry's state.
-          let (prev_muds, prev_loc, prev_pos) = match plist.get(&plinfo.name) {
-            Some(info) => (info.saved_muds, info.location, info.position),
-            None => (0, [0,0,0], [0,0])
-          };
-          */
-          
-          // If anything changed, we update the values.
-          //if plinfo.position != prev_pos || plinfo.location != prev_loc || plinfo.saved_muds != prev_muds {
-            let old_info = plist.insert(plinfo.name.clone(), plinfo.clone());
+
+          // We swap the old PlayerInfo with the new one.
+          let old_info = plist.insert(plinfo.name.clone(), plinfo.clone());
+          if let Some(old) = old_info {
+            // If anything changed...
+            if old != plinfo {
+              // If a player has entered a new chapter...
+              if old.location[0] != plinfo.location[0] && plinfo.location[0] != 0 {
+                // We send an announcement. "Player has entered chapter name!".
+                let _ = have_to.send(MessageType::ANNOUNCEMENT(format!("{} has entered {}!", plinfo.name, LEVEL_NAMES[*&plinfo.location[0] as usize - 1])));
+              }
+            }
             
             // And we notify the announcer thread, that it's time to send data to the players.
-            if let Some(old) = old_info {
-              if old != plinfo {
-                if old.location[0] != plinfo.location[0] && plinfo.location[0] != 0 {
-                  let _ = have_to.send(MessageType::ANNOUNCEMENT(format!("{} has entered {}", plinfo.name, LEVEL_NAMES[*&plinfo.location[0] as usize - 1])));
-                }
-              }
-              
-              let _ = have_to.send(MessageType::PLAYERSTATES);
-            }
-          //}
-        } else {}
+            let _ = have_to.send(MessageType::PLAYERSTATES);
+          }
+        }
       },
       
       Err(e) => {
@@ -127,13 +125,13 @@ fn write_or_drop(streams: &mut HashMap<String, TcpStream>, bytes: Vec<u8>) {
   use std::net::Shutdown::Both;
 
   streams.retain(
-    |_, stream| {
+    |name, stream| {
       match stream.write_all(bytes.as_slice()) {
         Ok(_) => true,          
         Err(e) => {
           if e.kind() != ErrorKind::TimedOut {
             stream.shutdown(Both).unwrap();
-            println!("Error. Dropping host.");
+            println!("Error. Dropping player {}.", name);
             return false;
           }
           true
@@ -175,7 +173,7 @@ fn console(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Sender<Mess
     // and then split their input at each space, trim the newlines and return the entire thing in a Vec.
     let mut line = String::new();
     print!("> ");
-    let _ = io::stdout().flush();
+    let _ = io::stdout().flush(); // Rust is line-buffered. We need to flush STDOUT for the "> " to show.
     let _ = stdin.lock().read_line(&mut line);
     let split: Vec<&str> = line.split(" ").map(|x| x.trim()).collect();
 
@@ -206,7 +204,7 @@ fn console(streams: Arc<Mutex<HashMap<String, TcpStream>>>, have_to: Sender<Mess
                 streams.lock().unwrap().remove(split[1]);
                 println!("{} kicked.", split[1]);
               },
-              "" | "no" | "n" |"N" | "NO" => {},
+              "" | "no" | "n" |"N" | "No" | "NO" => {},
               _ => println!("Please answer using (Y)es or (N)o.")
             };
           } else {
