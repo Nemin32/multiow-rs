@@ -1,4 +1,5 @@
 #[cfg(windows)] extern crate winapi;
+use winapi::ctypes::c_void;
 use winapi::shared::basetsd::LONG_PTR;
 use std::net::TcpStream;
 use std::{thread, time};
@@ -147,13 +148,12 @@ fn render_players(player_data: Receiver<([u16; 2], String)>) {
   }
 }
 
+// Contribs: agashlin, WindowsBunnyOne
 
 unsafe extern "system" fn wnd_proc(hwnd: winapi::shared::windef::HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
   use winapi::shared::windef::*;
   use winapi::um::winuser::*;
   use winapi::um::wingdi::*;
-  
-  let data: *mut Vec<u8> = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Vec<u8>;
 
   let mut ps = PAINTSTRUCT{
     hdc: null_mut(),
@@ -164,26 +164,45 @@ unsafe extern "system" fn wnd_proc(hwnd: winapi::shared::windef::HWND, msg: UINT
     rgbReserved: [0; 32]
   };
 
+  let data: *mut Vec<[u16; 2]> = GetPropW(hwnd, into_os("pos").as_ptr()) as *mut Vec<[u16; 2]>;
+  
+
   match msg {
-      WM_CLOSE => {DestroyWindow(hwnd); return 0;},
-      WM_DESTROY => {PostQuitMessage(0); return 0;},
+      WM_CLOSE => {return DestroyWindow(hwnd) as isize;},
+      WM_DESTROY => {RemovePropW(hwnd, into_os("pos").as_ptr()); PostQuitMessage(0); return 0;},
       WM_PAINT => {
         let dc: HDC = BeginPaint(hwnd, &mut ps);
+        
+        let mut brush = CreateSolidBrush(RGB(0,0,0));
+        let mut winrect: RECT = std::mem::zeroed();
+        GetWindowRect(hwnd, &mut winrect); 
+        let proportion_w: f64 = (winrect.right - winrect.left) as f64 / ROOM_WIDTH as f64;
+        let proportion_h: f64 = (winrect.bottom - winrect.top) as f64 / ROOM_HEIGHT as f64;
+
+        SelectObject(dc, brush as LPVOID);
+        Rectangle(dc, 0,0, 800, 600);
         SetBkColor(dc, RGB(244, 244, 244));
 
-        let text = into_os(&format!("Hello world, {:?}", *data));
+        if data != null_mut() {
+          let text = into_os(&format!("Data: {}", (*data).len()));
+          TextOutW(dc, 20, 20, text.as_ptr(), text.len() as i32);
 
-        TextOutW(dc, 20, 40, text.as_ptr(), text.len() as i32);
-        EndPaint(hwnd, &ps);
-        return 0;
+          for pos in &*data { 
+            let text = into_os(&format!("Hello world, {:?}", pos));
+            TextOutW(dc, into_proportion!(pos[0], -10, proportion_w), into_proportion!(pos[1], -30, proportion_h), text.as_ptr(), text.len() as i32);
+          }
+        }
+
+        DeleteObject(brush as LPVOID);
+        return EndPaint(hwnd, &ps) as isize;
       },
       _ => {return DefWindowProcW(hwnd, msg, wparam, lparam);}
-  };
+  }
 }
 
 
-unsafe fn create_layered() {
-  use winapi::shared::windef::*;
+unsafe fn create_layered(rec: Receiver<([u16; 2], String)>) {
+  use winapi::shared::windef::{HWND, POINT, RECT};
   use winapi::um::winuser::*;
 
   let wc = WNDCLASSW {
@@ -229,24 +248,32 @@ unsafe fn create_layered() {
     pt: POINT {x: 0, y: 0},
   };
 
-  SetWindowLongPtrW(win, GWLP_USERDATA, Box::into_raw(Box::new(vec![1u8,2u8,3u8])) as LONG_PTR);
+  
   SetLayeredWindowAttributes(win, winapi::um::wingdi::RGB(0,0,0), 0, LWA_COLORKEY);
   ShowWindow(win, SW_SHOWNORMAL);
-  UpdateWindow(win);
 
-  //let val: Box<u8> = ;
-  
+  //let dataz = vec![[20u16, 40u16], [60u16, 70u16]];
+  //SetWindowLongPtrW(win, GWLP_USERDATA, Box::into_raw(Box::new(dataz)) as LONG_PTR);
+  //SetWindowPos(win, null_mut(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
 
-  while GetMessageW(&mut msg, win, 0, 0) > 0 {
-      TranslateMessage(&msg);
-      DispatchMessageW(&msg);
+  loop {
+    let vals = rec.try_iter().map(|vals| vals.0).collect::<Vec<[u16;2]>>();
+
+    if vals.len() != 0 {
+      SetPropW(win, into_os("pos").as_ptr(), Box::into_raw(Box::new(vals)) as HANDLE);
+      //RedrawWindow(win, null_mut(), null_mut(), RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASENOW);
+      InvalidateRect(win, null_mut(), 1);
+      UpdateWindow(win);
+    }
+
+    PeekMessageW(&mut msg, win, 0, 0, PM_REMOVE);
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
   }
 }
 
 fn main() {
   unsafe {
-    thread::spawn(|| create_layered());
-
     let oddapp = FindWindowW(null_mut(), into_os("Oddworld Abe's Exoddus").as_ptr()); // HWND to the window.
     let mut proc: DWORD = 0;
     
@@ -275,12 +302,16 @@ fn main() {
     
     let mut prevhero: [u16; 2] = [0; 2];
     
+    let (sender, receiver) = channel();
+    thread::spawn(|| create_layered(receiver));
+
     let name = read_name();
     let mut connection = make_connection(name.clone());
 
-    let (sender, receiver) = channel();
     
-    thread::spawn(move || {render_players(receiver)});
+    
+    
+    //thread::spawn(move || {render_players(receiver)});
     
     
     ////// This is some confusing mess. //////
