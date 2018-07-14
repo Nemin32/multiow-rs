@@ -1,6 +1,4 @@
 #[cfg(windows)] extern crate winapi;
-use winapi::ctypes::c_void;
-use winapi::shared::basetsd::LONG_PTR;
 use std::net::TcpStream;
 use std::{thread, time};
 use std::io::Write;
@@ -108,10 +106,8 @@ fn make_connection(name: String) -> TcpStream {
   connection
 }
 
-macro_rules! into_proportion {
-  ($val:expr, $offset:expr, $prop:ident) => {(($val as i16 + $offset) as f64 * $prop) as i32};
-}
-// Now this is where things get a bit more interesting. This function renders names in white boxes for each player.
+//This is currently deprecated. If I don't need anything else from there, then it will be removed in a future commit.
+/*
 fn render_players(player_data: Receiver<([u16; 2], String)>) {
   use winapi::shared::windef::*;
   use winapi::um::winuser::*;
@@ -147,9 +143,14 @@ fn render_players(player_data: Receiver<([u16; 2], String)>) {
     }
   }
 }
+*/
+
+macro_rules! into_proportion {
+  ($val:expr, $offset:expr, $prop:ident) => {(($val as i16 + $offset) as f64 * $prop) as i32};
+}
 
 // Contribs: agashlin, WindowsBunnyOne
-
+// Now this is where things get a bit more interesting. This function renders names in white boxes for each player.
 unsafe extern "system" fn wnd_proc(hwnd: winapi::shared::windef::HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
   use winapi::shared::windef::*;
   use winapi::um::winuser::*;
@@ -164,7 +165,7 @@ unsafe extern "system" fn wnd_proc(hwnd: winapi::shared::windef::HWND, msg: UINT
     rgbReserved: [0; 32]
   };
 
-  let data: *mut Vec<[u16; 2]> = GetPropW(hwnd, into_os("pos").as_ptr()) as *mut Vec<[u16; 2]>;
+  let data: *mut Vec<([u16; 2], String)> = GetPropW(hwnd, into_os("pos").as_ptr()) as *mut Vec<([u16; 2], String)>;
   
 
   match msg {
@@ -184,11 +185,11 @@ unsafe extern "system" fn wnd_proc(hwnd: winapi::shared::windef::HWND, msg: UINT
         SetBkColor(dc, RGB(244, 244, 244));
 
         if data != null_mut() {
-          let text = into_os(&format!("Data: {}", (*data).len()));
-          TextOutW(dc, 20, 20, text.as_ptr(), text.len() as i32);
+          let text = into_os(&format!("Connected players: {}", (*data).len()));
+          TextOutW(dc, 5, 5, text.as_ptr(), text.len() as i32);
 
-          for pos in &*data { 
-            let text = into_os(&format!("Hello world, {:?}", pos));
+          for (pos, name) in &*data { 
+            let text = into_os(&format!("{}", name));
             TextOutW(dc, into_proportion!(pos[0], -10, proportion_w), into_proportion!(pos[1], -30, proportion_h), text.as_ptr(), text.len() as i32);
           }
         }
@@ -229,7 +230,7 @@ unsafe fn create_layered(rec: Receiver<([u16; 2], String)>) {
     into_os("MyWin").as_ptr(), 
     into_os("Test").as_ptr(), 
     WS_POPUP, 
-    pos.left + 5, pos.top+30, pos.right-pos.left - 5, pos.bottom-pos.top-30,
+    pos.left + 10, pos.top+30, pos.right-pos.left - 20, pos.bottom-pos.top-30,
     oddapp, 
     null_mut(), null_mut(), null_mut()
   );
@@ -252,16 +253,11 @@ unsafe fn create_layered(rec: Receiver<([u16; 2], String)>) {
   SetLayeredWindowAttributes(win, winapi::um::wingdi::RGB(0,0,0), 0, LWA_COLORKEY);
   ShowWindow(win, SW_SHOWNORMAL);
 
-  //let dataz = vec![[20u16, 40u16], [60u16, 70u16]];
-  //SetWindowLongPtrW(win, GWLP_USERDATA, Box::into_raw(Box::new(dataz)) as LONG_PTR);
-  //SetWindowPos(win, null_mut(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
-
   loop {
-    let vals = rec.try_iter().map(|vals| vals.0).collect::<Vec<[u16;2]>>();
+    let vals = rec.try_iter().collect::<Vec<([u16;2], String)>>();
 
     if vals.len() != 0 {
       SetPropW(win, into_os("pos").as_ptr(), Box::into_raw(Box::new(vals)) as HANDLE);
-      //RedrawWindow(win, null_mut(), null_mut(), RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASENOW);
       InvalidateRect(win, null_mut(), 1);
       UpdateWindow(win);
     }

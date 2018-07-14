@@ -1,8 +1,13 @@
 # multiow-rs
 Player tracking for Oddworld Abe's Exoddus implemented in Rust.
 
-Currently supports:
-- Number of rescued Mudokons
-- Tracking of each player's LVL ID / Path ID
-- Tracking of each player's position and displaying it as a red rectangle [UNTESTED]
-- Showing each player's name where their position is. [BUGGY]
+###Oddserver:
+- Server, capable of tracking players' position and rescued Mudokons.
+- Supports a few basic commands (use "help").
+- Notifies server owner about joining and leaving players.
+
+###Oddclient:
+- Client.
+- Let's player choose their name and the server to connect to.
+- Capable of displaying the players who are currently in the same room as the person running the client.
+- Can also display announcements from the server.
