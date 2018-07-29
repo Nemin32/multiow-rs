@@ -1,4 +1,5 @@
 tools/
-a.exe
-ddraw.dll
-dllmain.cpp
+cpp_attempts/a.exe
+cpp_attempts/dllmain.cpp
+cpp_attempts/ddraw.dll
+vs_workspace.code-workspace
